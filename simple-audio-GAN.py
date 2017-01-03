@@ -1,3 +1,4 @@
+# coding: utf-8
 import os
 import sys
 import time
@@ -19,7 +20,8 @@ def get_discriminative_model(input_size):
 def get_generative_model(output_size):
     model = Sequential()
     model.add(Dense(100, activation='relu', input_dim=100))
-    model.add(Dense(output_size, activation='tanh'))
+    model.add(Dense(output_size, activation='tanh')) # Tanh as the last layer of the generator output
+                                                     # https://github.com/soumith/ganhacks#1-normalize-the-inputs
     return model
 
 
@@ -33,10 +35,10 @@ def get_generator_containing_disciminator(generator, discriminator):
 
 def get_audio(filename):
     sr, audio = read(filename)
-    audio = audio.astype(float)
-    audio = audio - audio.min()
-    audio = audio / (audio.max() - audio.min())
-    audio = (audio - 0.5) * 2
+    audio = audio.astype(np.float32)
+    # audio = audio - audio.min()
+    # audio = audio / (audio.max() - audio.min())
+    # audio = (audio - 0.5) * 2  # -1 to 1
     return sr, audio
 
 
@@ -45,13 +47,16 @@ def get_training_data(frame_size, frame_shift):
     X_train = []
     base = 0
     n_possible_examples = int((len(audio) - frame_size) / float(frame_shift))
-    # print 'Total number of possible samples:', n_possible_examples
+    print 'Total number of possible samples:', n_possible_examples
+    if n_possible_examples < 10000:
+        print "Error: sample.wav too short"
     while len(X_train) < 10000:
-        frame = audio[base:base+frame_size]
+        frame = audio[base:base+frame_size].reshape(frame_size, 1)
         X_train.append(frame)
         base += frame_shift
+    size = len(X_train)
     X_train = np.array(X_train)
-    return sr, np.array(X_train)
+    return sr, X_train.reshape(size, frame_size)
 
 
 def get_uniform_noise(n):
@@ -59,13 +64,20 @@ def get_uniform_noise(n):
 
 
 if __name__ == '__main__':
-    n_epochs = 10
+
+    if os.path.exists("saved_models") == False:
+        os.mkdir("saved_models")
+
+    n_epochs = 100
     batch_size = 200
     frame_shift = 100
     frame_size = 4000
-    n_audios_to_dump = 10
-    model_dumping_freq = 5
+    n_audios_to_dump = 2
+    model_dumping_freq = 4
     sr, X_train = get_training_data(frame_size, frame_shift)
+
+    # generatorとdiscriminator
+    # それぞれのframe_size分のサンプルの音を生成する
     generator = get_generative_model(frame_size)
     discriminator = get_discriminative_model(frame_size)
     generator_containing_disciminator = get_generator_containing_disciminator(generator, discriminator)
@@ -75,7 +87,7 @@ if __name__ == '__main__':
     generator_containing_disciminator.compile(loss='binary_crossentropy', optimizer=g_optim)
     discriminator.trainable = True
     discriminator.compile(loss='binary_crossentropy', optimizer=d_optim)
-    n_minibatches = int(X_train.shape[0]/batch_size)
+    n_minibatches = int(X_train.shape[0]/batch_size) # 50
     for i in range(n_epochs):
         print 'Epoch:', i+1
         d_losses = []
@@ -109,14 +121,19 @@ if __name__ == '__main__':
             gend_audio_dirpath = os.path.join('generated_audios', str_timestamp)
             os.makedirs(gend_audio_dirpath)
             counter = 0
+            total_counter = 0
             while counter < n_audios_to_dump:
                 noise = get_uniform_noise(1)
                 gend_audio = generator.predict(noise)
                 if discriminator.predict(gend_audio)[0] > 0.5:
                     gend_audio = gend_audio[0]
-                    gend_audio *= 2**15
+                    # gend_audio *= 2**15
                     outfile = str(counter)+'.wav'
                     outfilepath = os.path.join(gend_audio_dirpath, outfile)
                     print '   + ', outfilepath
-                    write(outfilepath, sr, gend_audio.astype(np.int16))
+                    # write(outfilepath, sr, gend_audio.astype(np.int16))
+                    write(outfilepath, sr, gend_audio.astype(np.float32))
                     counter += 1
+                total_counter += 1
+                if total_counter > 100:
+                    break
